@@ -68,6 +68,22 @@ io.on("connection", (socket) => {
       if (players.length > 0) io.to(roomCode).emit("roomData", players);
     }
   });
+
+  socket.on("drawCard", (roomCode) => {
+  const room = rooms[roomCode];
+  if (!room) return;
+
+  const playerIndex = room.players.findIndex(
+    (p) => p.socketId === socket.id
+  );
+  if (playerIndex !== room.currentTurn) return;
+
+  const card = room.deck.pop();
+  if (card) room.players[playerIndex].hand.push(card);
+
+  io.to(roomCode).emit("cardDrawn", room);
+  });
+
 });
 
 const PORT = process.env.PORT || 5000;
