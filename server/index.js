@@ -7,7 +7,7 @@ const { Server } = require("socket.io");
 const connectDB = require("./config/db"); // optional if using MongoDB
 connectDB?.();
 
-const { rooms, joinRoom, leaveRoom, dealCards, playCard } = require("./socket/rooms");
+const gameManager = require("./gameManager");
 
 const app = express();
 app.use(cors());
@@ -21,69 +21,77 @@ const io = new Server(server, {
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
 
-  // Join room
-  socket.on("joinRoom", (roomCode, username) => {
-    socket.join(roomCode);
-    const players = joinRoom(roomCode, username, socket.id);
+  // Join game
+  socket.on("joinGame", ({ gameId, playerName }) => {
+    try {
+      const { game, player } = gameManager.joinGame(gameId, playerName, socket.id);
+      socket.join(gameId);
 
-    io.to(roomCode).emit("message", `${username} has joined the room`);
-    io.to(roomCode).emit("roomData", players);
+      // Send current game state to the joining player
+      socket.emit("gameStateUpdate", game);
 
-    // Start game if >=2 players
-    if (players.length >= 2 && rooms[roomCode].status === "waiting") {
-      dealCards(roomCode);
-      rooms[roomCode].status = "playing";
-      io.to(roomCode).emit("startGame", rooms[roomCode]);
+      // Notify others in the room
+      socket.to(gameId).emit("playerJoined", { player });
+
+      console.log(`${playerName} joined game ${gameId}`);
+    } catch (error) {
+      socket.emit("error", { message: error.message });
     }
   });
 
-  // Leave room
-  socket.on("leaveRoom", (roomCode) => {
-    const players = leaveRoom(roomCode, socket.id);
-    socket.leave(roomCode);
-    io.to(roomCode).emit("roomData", players);
+  // Start game
+  socket.on("startGame", ({ gameId }) => {
+    try {
+      const gameState = gameManager.startGame(gameId);
+      if (gameState) {
+        io.to(gameId).emit("gameStateUpdate", gameState);
+        console.log(`Game ${gameId} started`);
+      } else {
+        socket.emit("error", { message: "Cannot start game - need at least 2 players" });
+      }
+    } catch (error) {
+      socket.emit("error", { message: error.message });
+    }
   });
 
   // Play card
-  socket.on("playCard", (roomCode, card, chosenColor) => {
-    const result = playCard(roomCode, socket.id, card, chosenColor);
+  socket.on("playCard", ({ gameId, move }) => {
+    try {
+      const result = gameManager.handlePlayCard(gameId, socket.id, move);
+      if (result.success) {
+        io.to(gameId).emit("gameStateUpdate", result.gameState);
+        console.log(`Card played in game ${gameId}`);
+      } else {
+        socket.emit("error", { message: result.error });
+      }
+    } catch (error) {
+      socket.emit("error", { message: error.message });
+    }
+  });
 
-    if (result) {
-      io.to(roomCode).emit("cardPlayed", {
-        playedCard: result.playedCard,
-        nextPlayerId: result.nextPlayerId,
-        room: result.room,
-        winner: result.winner,
-      });
-    } else {
-      socket.emit("invalidPlay", "Invalid move or not your turn");
+  // Draw card
+  socket.on("drawCard", ({ gameId }) => {
+    try {
+      const result = gameManager.handleDrawCard(gameId, socket.id);
+      if (result.success) {
+        io.to(gameId).emit("gameStateUpdate", result.gameState);
+        console.log(`Card drawn in game ${gameId}`);
+      } else {
+        socket.emit("error", { message: result.error });
+      }
+    } catch (error) {
+      socket.emit("error", { message: error.message });
     }
   });
 
   // Disconnect
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
-    for (const roomCode in rooms) {
-      const players = leaveRoom(roomCode, socket.id);
-      if (players.length > 0) io.to(roomCode).emit("roomData", players);
+    const game = gameManager.leaveGame(socket.id);
+    if (game) {
+      io.to(game.id).emit("gameStateUpdate", game);
     }
   });
-
-  socket.on("drawCard", (roomCode) => {
-  const room = rooms[roomCode];
-  if (!room) return;
-
-  const playerIndex = room.players.findIndex(
-    (p) => p.socketId === socket.id
-  );
-  if (playerIndex !== room.currentTurn) return;
-
-  const card = room.deck.pop();
-  if (card) room.players[playerIndex].hand.push(card);
-
-  io.to(roomCode).emit("cardDrawn", room);
-  });
-
 });
 
 const PORT = process.env.PORT || 5000;
