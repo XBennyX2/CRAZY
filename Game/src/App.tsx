@@ -1,81 +1,161 @@
-import { useState } from "react";
-import { createTestGame } from "./game/dev/initGame";
-import { canPlayCard } from "./game/rules/validators";
-import { applyCardEffects } from "./game/rules/applyPlay";
-import { getNextPlayerIndex } from "./game/engine/turn";
-import type { GameState } from "./game/models/GameState";
+import { useState } from 'react';
+import type { GameState } from './game/models/GameState';
+import type { Card } from './game/models/Card';
+import { drawCards } from './game/engine/draw';
+import { canPlayCard } from './game/rules/validators';
+import { applyCardEffects } from './game/rules/applyPlay';
+
+const initialState: GameState = {
+  players: [
+    {
+      id: 'p1',
+      name: 'Alice',
+      hand: [
+        { id: '3', suit: 'hearts', rank: 7 },
+        { id: '8', suit: 'spades', rank: 8 }
+      ],
+      skippedTurns: 0
+    },
+    {
+      id: 'p2',
+      name: 'Bob',
+      hand: [
+        { id: '2', suit: 'spades', rank: 8 },
+        { id: '4', suit: 'clubs', rank: 5 }
+      ],
+      skippedTurns: 0
+    }
+  ],
+  currentPlayerIndex: 0,
+  direction: 1,
+  deck: [
+    { id: '5', suit: 'diamonds', rank: 3 },
+    { id: '6', suit: 'hearts', rank: 4 },
+    { id: '7', suit: 'spades', rank: 6 },
+    { id: '8', suit: 'clubs', rank: 9 },
+    { id: '9', suit: 'diamonds', rank: 10 },
+    { id: '10', suit: 'hearts', rank: 'A' },
+  ],
+  discardPile: [
+    { id: 'start', suit: 'hearts', rank: 7 },
+    { id: '1', suit: 'hearts', rank: 2 }
+  ],
+  currentSuit: 'hearts',
+  suitChangeLock: false,
+  drawStack: 2,
+  finishedPlayers: [],
+  settings: {
+    decks: 1,
+    includeJokers: false,
+    finishPlayersCount: 1,
+    reverseCard: 7,
+    skipCard: 5,
+    allowStacking: true
+  }
+};
 
 export default function App() {
-  const [game, setGame] = useState<GameState>(createTestGame());
+  const [state, setState] = useState<GameState>(initialState);
+  const [selectedSuit, setSelectedSuit] = useState<string | null>(null);
+  const [selectedCard, setSelectedCard] = useState<Card | null>(null);
 
-  const currentPlayer = game.players[game.currentPlayerIndex];
+  const currentPlayer = state.players[state.currentPlayerIndex];
 
-  function playCard(cardIndex: number) {
-    const card = currentPlayer.hand[cardIndex];
-    const result = canPlayCard(game, card);
+  function playCard(card: Card, chosenSuit?: string) {
+    setState(s => {
+      const validation = canPlayCard(s, card);
+      if (!validation.valid) {
+        alert(validation.reason);
+        return s;
+      }
 
-    if (!result.valid) {
-      alert(result.reason);
-      return;
+      const players = [...s.players];
+      players[s.currentPlayerIndex] = {
+        ...players[s.currentPlayerIndex],
+        hand: players[s.currentPlayerIndex].hand.filter(c => c.id !== card.id)
+      };
+
+      const stateAfterRemoval = { ...s, players };
+
+      const stateAfterEffects = applyCardEffects(stateAfterRemoval, card, chosenSuit);
+
+      // Advance turn after effects
+      const nextIndex = (stateAfterEffects.currentPlayerIndex + stateAfterEffects.direction + stateAfterEffects.players.length) % stateAfterEffects.players.length;
+
+      return { ...stateAfterEffects, currentPlayerIndex: nextIndex };
+    });
+    setSelectedSuit(null);
+    setSelectedCard(null);
+  }
+
+  function handleCardClick(card: Card) {
+    if (card.rank === 8 || card.rank === 'J' || card.rank === 'JOKER') {
+      setSelectedCard(card);
+      setSelectedSuit('hearts'); // Default selection
+    } else {
+      playCard(card);
     }
+  }
 
-    // clone FIRST
-    let next = structuredClone(game);
-
-    // remove card from cloned player
-    next.players[next.currentPlayerIndex].hand.splice(cardIndex, 1);
-
-    // apply rules
-    next = applyCardEffects(next, card, "clubs");
-
-    // advance turn
-    next.currentPlayerIndex = getNextPlayerIndex(next);
-
-    setGame(next);
+  function confirmSuitSelection() {
+    if (selectedCard && selectedSuit) {
+      playCard(selectedCard, selectedSuit);
+    }
   }
 
   function drawCard() {
-    const next = structuredClone(game);
-    const player = next.players[next.currentPlayerIndex];
-
-    const card = next.deck.pop();
-    if (card) player.hand.push(card);
-
-    // pass turn after draw
-    next.currentPlayerIndex = getNextPlayerIndex(next);
-
-    setGame(next);
+    setState(s => drawCards(s, s.drawStack > 0 ? s.drawStack : 1));
   }
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>CRAZY – Dev Test Mode</h2>
+    <div style={{ padding: 20, fontFamily: 'sans-serif' }}>
+      <h1>CRAZY – Dev Test Mode</h1>
 
-      <p>
-        Current Player: <b>{currentPlayer.name}</b>
-      </p>
+      <h3>Current Player: {currentPlayer.name}</h3>
+      <p>Current Suit: {state.currentSuit}</p>
+      <p>Draw Stack: {state.drawStack}</p>
 
-      <p>Current Suit: {game.currentSuit}</p>
-      <p>Draw Stack: {game.drawStack}</p>
-
-      <h3>Hand</h3>
-      {currentPlayer.hand.map((c, i) => (
+      <h2>Hand</h2>
+      {currentPlayer.hand.map(card => (
         <button
-          key={c.id}
-          onClick={() => playCard(i)}
-          style={{ marginRight: 8 }}
+          key={card.id}
+          onClick={() => handleCardClick(card)}
+          style={{ margin: 6, padding: 10 }}
         >
-          {c.rank} of {c.suit}
+          {card.rank} of {card.suit}
         </button>
       ))}
 
-      <br /><br />
+      {selectedCard && (
+        <div style={{ marginTop: 20, border: '1px solid black', padding: 10 }}>
+          <h3>Choose a suit for your {selectedCard.rank} of {selectedCard.suit}:</h3>
+          {['hearts', 'diamonds', 'clubs', 'spades'].map(suit => (
+            <button
+              key={suit}
+              onClick={() => setSelectedSuit(suit)}
+              style={{
+                margin: 5,
+                padding: 10,
+                backgroundColor: selectedSuit === suit ? 'lightblue' : 'white'
+              }}
+            >
+              {suit}
+            </button>
+          ))}
+          <br />
+          <button
+            onClick={confirmSuitSelection}
+            style={{ marginTop: 10, padding: 10 }}
+          >
+            Play Card
+          </button>
+        </div>
+      )}
 
-      <button onClick={drawCard}>Draw</button>
+      <div style={{ marginTop: 20 }}>
+        <button onClick={drawCard}>Draw</button>
+      </div>
 
-      <pre style={{ marginTop: 20 }}>
-        {JSON.stringify(game, null, 2)}
-      </pre>
     </div>
   );
 }
