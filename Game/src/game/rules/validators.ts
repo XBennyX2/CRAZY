@@ -21,8 +21,16 @@ export function canPlayCard(
   }
 
   // Stack 2s (numeric guard REQUIRED)
-
   if (card.rank === 2) {
+    return { valid: true };
+  }
+
+  // Wild cards can be played during draw stack (allows calling crazy)
+  if (
+    card.rank === 8 ||
+    card.rank === "J" ||
+    card.rank === "JOKER"
+  ) {
     return { valid: true };
   }
 

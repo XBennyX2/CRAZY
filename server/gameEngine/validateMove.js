@@ -16,8 +16,7 @@ function validateMove(state, move) {
     if (cards.length !== 1) throw new Error('Must play one card when stacking');
     const card = cards[0];
     if (!player.hand.some(c => c.id === card.id)) throw new Error('Card not in hand');
-    if (!canStack(card, topCard)) throw new Error('Cannot stack this card');
-    if (isSuitChangeCard(card)) throw new Error('Cannot play wild card on draw stack');
+    if (!canStack(card, topCard) && !isSuitChangeCard(card)) throw new Error('Cannot stack this card');
     return; // valid
   }
 
