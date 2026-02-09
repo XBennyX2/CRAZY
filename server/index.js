@@ -4,10 +4,11 @@ require("dotenv").config();
 const http = require("http");
 const { Server } = require("socket.io");
 
-const connectDB = require("./config/db"); // optional if using MongoDB
+const connectDB = require("./config/db"); // optional
 connectDB?.();
 
-const gameManager = require("./gameManager");
+// Make sure this path is correct!
+const gameManager = require("./gameManager"); 
 
 const app = express();
 app.use(cors());
@@ -21,46 +22,63 @@ const io = new Server(server, {
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
 
-  // Join game
+  // --- JOIN GAME ---
   socket.on("joinGame", ({ gameId, playerName }) => {
     try {
-      const { game, player } = gameManager.joinGame(gameId, playerName, socket.id);
+      const result = gameManager.joinGame(gameId, playerName, socket.id);
+      
+      // Check if joinGame returned an error (if your logic supports that) or the object
+      if (!result || !result.game) {
+        socket.emit("error", { message: "Failed to join game" });
+        return;
+      }
+
+      const { game, player } = result;
+
       socket.join(gameId);
 
-      // Send current game state to the joining player
+      // 1. Send the full game state to the person joining
       socket.emit("gameStateUpdate", game);
 
-      // Notify others in the room
-      socket.to(gameId).emit("playerJoined", { player });
+      // 2. Notify everyone else in the room that a player joined
+      // We send the UPDATED GAME STATE to everyone, not just a notification
+      socket.to(gameId).emit("gameStateUpdate", game);
 
       console.log(`${playerName} joined game ${gameId}`);
     } catch (error) {
+      console.error("Join Error:", error);
       socket.emit("error", { message: error.message });
     }
   });
 
-  // Start game
+  // --- START GAME ---
   socket.on("startGame", ({ gameId }) => {
+    console.log(`Start request for ${gameId} from ${socket.id}`);
     try {
-      const gameState = gameManager.startGame(gameId);
-      if (gameState) {
-        io.to(gameId).emit("gameStateUpdate", gameState);
-        console.log(`Game ${gameId} started`);
+      // Pass socket.id so gameManager can verify the user is in the room
+      const result = gameManager.startGame(gameId, socket.id);
+
+      // CRITICAL FIX: Check if the result is an error object
+      if (result.error) {
+        console.error("Start Game Failed:", result.error);
+        socket.emit("error", { message: result.error });
       } else {
-        socket.emit("error", { message: "Cannot start game - need at least 2 players" });
+        // If success, 'result' is the Game Object
+        io.to(gameId).emit("gameStateUpdate", result);
+        console.log(`Game ${gameId} started successfully`);
       }
     } catch (error) {
-      socket.emit("error", { message: error.message });
+      console.error("Start Game Crash:", error);
+      socket.emit("error", { message: "Server error starting game" });
     }
   });
 
-  // Play card
+  // --- PLAY CARD ---
   socket.on("playCard", ({ gameId, move }) => {
     try {
       const result = gameManager.handlePlayCard(gameId, socket.id, move);
       if (result.success) {
         io.to(gameId).emit("gameStateUpdate", result.gameState);
-        console.log(`Card played in game ${gameId}`);
       } else {
         socket.emit("error", { message: result.error });
       }
@@ -69,13 +87,26 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Draw card
+  // --- DRAW CARD ---
   socket.on("drawCard", ({ gameId }) => {
     try {
       const result = gameManager.handleDrawCard(gameId, socket.id);
       if (result.success) {
         io.to(gameId).emit("gameStateUpdate", result.gameState);
-        console.log(`Card drawn in game ${gameId}`);
+      } else {
+        socket.emit("error", { message: result.error });
+      }
+    } catch (error) {
+      socket.emit("error", { message: error.message });
+    }
+  });
+  
+  // --- PASS TURN ---
+  socket.on("pass", ({ gameId }) => {
+    try {
+      const result = gameManager.handlePass(gameId, socket.id);
+      if (result.success) {
+        io.to(gameId).emit("gameStateUpdate", result.gameState);
       } else {
         socket.emit("error", { message: result.error });
       }
@@ -84,11 +115,27 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Disconnect
+  // --- CALL CRAZY ---
+  socket.on("callCrazy", ({ gameId, targetPlayerId }) => {
+    try {
+        const result = gameManager.handleCallCrazy(gameId, socket.id, targetPlayerId);
+        if (result.success) {
+            io.to(gameId).emit("gameStateUpdate", result.gameState);
+            // Optional: Emit a specific message saying who was caught
+        } else {
+            socket.emit("error", { message: result.error || result.reason });
+        }
+    } catch (error) {
+        socket.emit("error", { message: error.message });
+    }
+  });
+
+  // --- DISCONNECT ---
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
     const game = gameManager.leaveGame(socket.id);
     if (game) {
+      // If a player leaves, update the room so their name disappears
       io.to(game.id).emit("gameStateUpdate", game);
     }
   });

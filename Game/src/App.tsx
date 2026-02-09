@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
+import type { JSX } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { GameState } from './game/models/GameState';
 import type { Card } from './game/models/Card';
 
 const SERVER_URL = 'http://localhost:5000';
 
-export default function App() {
+export default function App(): JSX.Element {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [gameId, setGameId] = useState('');
@@ -14,239 +15,227 @@ export default function App() {
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
   const [selectedSuit, setSelectedSuit] = useState<string>('hearts');
   const [error, setError] = useState<string>('');
+  const [viewingPlayerId, setViewingPlayerId] = useState<string | null>(null);
 
   useEffect(() => {
-    const newSocket = io(SERVER_URL);
-    setSocket(newSocket);
+    const s: Socket = io(SERVER_URL);
+    setSocket(s);
 
-    // Connection events
-    newSocket.on('connect', () => {
-      setIsConnected(true);
-      console.log('Connected to server');
-    });
-
-    newSocket.on('disconnect', () => {
-      setIsConnected(false);
-      console.log('Disconnected from server');
-    });
-
-    // Game events
-    newSocket.on('gameStateUpdate', (state: GameState) => {
+    s.on('connect', () => setIsConnected(true));
+    s.on('disconnect', () => setIsConnected(false));
+    s.on('gameStateUpdate', (state: GameState) => {
+      console.log("State Update:", state); // Debug log
       setGameState(state);
-      setError('');
-      console.log('Game state updated:', state);
+      setError(''); 
     });
+    s.on('error', (data: any) => setError(data?.message || String(data)));
 
-    newSocket.on('playerJoined', (data) => {
-      console.log('Player joined:', data.player);
-    });
-
-    newSocket.on('error', (data) => {
-      setError(data.message);
-      console.error('Server error:', data.message);
-    });
-
-    return () => {
-      newSocket.close();
-    };
+    return () => { s.close(); };
   }, []);
 
+  // --- Actions ---
   const joinGame = () => {
     if (!socket || !gameId.trim() || !playerName.trim()) return;
     socket.emit('joinGame', { gameId: gameId.trim(), playerName: playerName.trim() });
   };
 
-  const startGame = () => {
-    if (!socket || !gameId) return;
-    socket.emit('startGame', { gameId });
+  const startGame = () => { 
+    if (socket && gameId) socket.emit('startGame', { gameId }); 
   };
 
   const playCard = (card: Card) => {
     if (!socket || !gameId) return;
-
-    // For wild cards, show suit selection
     if (card.rank === 8 || card.rank === 'J' || card.rank === 'JOKER') {
       setSelectedCard(card);
-      setSelectedSuit('hearts');
-    } else {
-      socket.emit('playCard', {
-        gameId,
-        move: { cards: [card] }
-      });
+      return;
     }
+    socket.emit('playCard', { gameId, move: { cards: [card] } });
   };
 
   const confirmPlayCard = () => {
     if (!socket || !gameId || !selectedCard) return;
-
-    socket.emit('playCard', {
-      gameId,
-      move: { cards: [selectedCard], suit: selectedSuit }
-    });
-
+    socket.emit('playCard', { gameId, move: { cards: [selectedCard], suit: selectedSuit } });
     setSelectedCard(null);
   };
 
-  const drawCard = () => {
-    if (!socket || !gameId) return;
-    socket.emit('drawCard', { gameId });
+  const drawCard = () => { if (socket && gameId) socket.emit('drawCard', { gameId }); };
+  const passTurn = () => { if (socket && gameId) socket.emit('pass', { gameId }); };
+  
+  const callCrazy = () => {
+    const sel = document.getElementById('crazyTarget') as HTMLSelectElement;
+    const targetPlayerId = sel?.value;
+    if (socket && gameId && targetPlayerId) {
+        socket.emit('callCrazy', { gameId, targetPlayerId });
+    }
   };
 
-  if (!isConnected) {
-    return (
-      <div style={{ padding: 20, fontFamily: 'sans-serif' }}>
-        <h1>Connecting to CRAZY Game Server...</h1>
-      </div>
-    );
-  }
+  // --- UI Logic Helpers ---
+  if (!isConnected) return <div style={{ padding: 20 }}>Connecting to Server...</div>;
 
+  // 1. LOBBY VIEW (Before joining any room)
   if (!gameState) {
     return (
-      <div style={{ padding: 20, fontFamily: 'sans-serif' }}>
-        <h1>CRAZY Card Game</h1>
-
-        <div style={{ marginBottom: 20 }}>
-          <input
-            type="text"
-            placeholder="Game ID"
-            value={gameId}
-            onChange={(e) => setGameId(e.target.value)}
-            style={{ marginRight: 10, padding: 5 }}
-          />
-          <input
-            type="text"
-            placeholder="Your Name"
-            value={playerName}
-            onChange={(e) => setPlayerName(e.target.value)}
-            style={{ marginRight: 10, padding: 5 }}
-          />
-          <button onClick={joinGame} style={{ padding: 5 }}>Join Game</button>
-        </div>
-
-        {error && (
-          <div style={{ color: 'red', marginBottom: 10 }}>
-            Error: {error}
+      <div style={{ padding: 40, fontFamily: 'sans-serif', textAlign: 'center' }}>
+        <h1>🃏 CRAZY Card Game</h1>
+        <div style={{ display: 'inline-block', textAlign: 'left', padding: 20, border: '1px solid #ccc', borderRadius: 8 }}>
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ display: 'block' }}>Game ID:</label>
+            <input style={{ padding: 8, width: '100%' }} value={gameId} onChange={e => setGameId(e.target.value)} />
           </div>
-        )}
-
-        <div>
-          <h3>How to Play:</h3>
-          <ul>
-            <li>Create or join a game with a Game ID</li>
-            <li>Wait for at least 2 players to join</li>
-            <li>Click "Start Game" to begin</li>
-            <li>Play cards that match suit or rank</li>
-            <li>8s and Jacks are wild - choose a suit when playing them</li>
-          </ul>
+          <div style={{ marginBottom: 15 }}>
+            <label style={{ display: 'block' }}>Your Name:</label>
+            <input style={{ padding: 8, width: '100%' }} value={playerName} onChange={e => setPlayerName(e.target.value)} />
+          </div>
+          <button onClick={joinGame} style={{ width: '100%', padding: 10, cursor: 'pointer', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: 4 }}>
+            Join Game Room
+          </button>
         </div>
+        {error && <div style={{ color: 'red', marginTop: 10 }}>{error}</div>}
       </div>
     );
   }
 
-  const currentPlayer = gameState.players[gameState.currentPlayerIndex];
+  // 2. SAFETY GUARD: Ensure players list exists before trying to read it
+  // This prevents the "Cannot read properties of undefined (reading 'find')" error
+  if (!gameState.players || !Array.isArray(gameState.players)) {
+    return <div style={{ padding: 20 }}>Initializing Game Data...</div>;
+  }
+
+  // 3. GAME ROOM VARIABLES (Now safe to access)
   const myPlayer = gameState.players.find(p => p.socketId === socket?.id);
+  
+  const viewingPlayer = viewingPlayerId 
+    ? gameState.players.find(p => p.id === viewingPlayerId) 
+    : myPlayer;
+
+  const gameHasStarted = gameState.discardPile && gameState.discardPile.length > 0;
 
   return (
-    <div style={{ padding: 20, fontFamily: 'sans-serif' }}>
-      <h1>CRAZY – Multiplayer Game</h1>
+    <div style={{ padding: 20, fontFamily: 'sans-serif', maxWidth: 800, margin: '0 auto' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #eee', paddingBottom: 10 }}>
+        <h1>CRAZY — Room: {gameId}</h1>
+        {/* START BUTTON: Only shows if game hasn't started */}
+        {!gameHasStarted && (
+          <button 
+            onClick={startGame} 
+            style={{ padding: '10px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 'bold' }}
+          >
+            Start Game (Min 2)
+          </button>
+        )}
+      </header>
 
-      <div style={{ marginBottom: 20 }}>
-        <strong>Game ID:</strong> {gameId} |
-        <strong> Current Suit:</strong> {gameState.currentSuit} |
-        <strong> Draw Stack:</strong> {gameState.drawStack}
+      {error && <div style={{ color: 'white', backgroundColor: '#ff4444', padding: 10, borderRadius: 4, margin: '10px 0' }}>{error}</div>}
+
+      <div style={{ display: 'flex', gap: 20, marginTop: 20 }}>
+        {/* Left Side: Players List */}
+        <div style={{ flex: 1 }}>
+          <h3>Players</h3>
+          <ul style={{ listStyle: 'none', padding: 0 }}>
+            {gameState.players.map((p, idx) => (
+              <li key={p.id} style={{ 
+                padding: 10,
+                marginBottom: 5,
+                borderRadius: 4,
+                backgroundColor: idx === gameState.currentPlayerIndex ? '#e8f5e9' : '#f8f9fa',
+                borderLeft: idx === gameState.currentPlayerIndex ? '5px solid #4caf50' : '5px solid #dee2e6'
+              }}>
+                <strong>{p.name}</strong> {p.socketId === socket?.id && '(You)'}
+                <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                  {p.hand.length} cards {idx === gameState.currentPlayerIndex && '• ACTIVE TURN'}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Right Side: Table State */}
+        <div style={{ flex: 1, textAlign: 'center', backgroundColor: '#fcfcfc', border: '1px dashed #ccc', padding: 20 }}>
+          <h4>Discard Pile</h4>
+          {gameHasStarted ? (
+            <div style={{ fontSize: '1.5rem', padding: '30px 20px', border: '2px solid #333', borderRadius: 10, display: 'inline-block', backgroundColor: 'white' }}>
+              {gameState.discardPile[gameState.discardPile.length - 1].rank} 
+              <span style={{ display: 'block', fontSize: '1rem' }}>of {gameState.discardPile[gameState.discardPile.length - 1].suit}</span>
+            </div>
+          ) : (
+            <div style={{ color: '#999', padding: '40px 0' }}>Waiting for host to start...</div>
+          )}
+          
+          <div style={{ marginTop: 15 }}>
+            <strong>Active Suit:</strong> {gameState.currentSuit || 'None'}
+          </div>
+        </div>
       </div>
 
-      {error && (
-        <div style={{ color: 'red', marginBottom: 10, padding: 10, border: '1px solid red' }}>
-          {error}
-        </div>
-      )}
+      <hr style={{ margin: '20px 0' }} />
 
-      <h3>Players:</h3>
-      <ul>
-        {gameState.players.map((player, index) => (
-          <li key={player.id} style={{
-            fontWeight: index === gameState.currentPlayerIndex ? 'bold' : 'normal',
-            color: player.socketId === socket?.id ? 'blue' : 'black'
-          }}>
-            {player.name} {index === gameState.currentPlayerIndex ? '(Current Turn)' : ''}
-            {player.socketId === socket?.id ? ' (You)' : ''}
-            - {player.hand.length} cards
-          </li>
-        ))}
-      </ul>
+      {/* Hand Section */}
+      <h3>{viewingPlayer?.name || 'Spectating'}'s Hand</h3>
+      <div style={{ marginBottom: 12 }}>
+        <select value={viewingPlayerId || ''} onChange={e => setViewingPlayerId(e.target.value || null)}>
+          <option value="">View: Me (Auto)</option>
+          {gameState.players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
 
-      {myPlayer && (
-        <>
-          <h3>Your Hand:</h3>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            {myPlayer.hand.map(card => (
-              <button
-                key={card.id}
-                onClick={() => playCard(card)}
-                style={{
-                  padding: 10,
-                  minWidth: 80,
-                  backgroundColor: gameState.currentPlayerIndex === gameState.players.findIndex(p => p.id === myPlayer.id) ? 'lightgreen' : 'white'
-                }}
-                disabled={gameState.currentPlayerIndex !== gameState.players.findIndex(p => p.id === myPlayer.id)}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', minHeight: 100, padding: 15, backgroundColor: '#eee', borderRadius: 8 }}>
+        {viewingPlayer?.hand.map(card => {
+          const isMyTurn = gameState.currentPlayerIndex === gameState.players.findIndex(p => p.socketId === socket?.id);
+          const isViewingSelf = viewingPlayer.socketId === socket?.id;
+          
+          return (
+            <button 
+              key={card.id} 
+              onClick={() => playCard(card)} 
+              disabled={!isMyTurn || !isViewingSelf || !gameHasStarted}
+              style={{ 
+                padding: '15px 10px', 
+                minWidth: 80,
+                cursor: (isMyTurn && isViewingSelf && gameHasStarted) ? 'pointer' : 'not-allowed',
+                boxShadow: '2px 2px 5px rgba(0,0,0,0.1)'
+              }}
+            >
+              {card.rank}<br/>{card.suit}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Wild Card Modal */}
+      {selectedCard && (
+        <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', backgroundColor: 'white', padding: 30, borderRadius: 12, boxShadow: '0 0 20px rgba(0,0,0,0.3)', zIndex: 100 }}>
+          <h3>Wild Card! Choose a Suit</h3>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+            {['hearts', 'diamonds', 'clubs', 'spades'].map(s => (
+              <button 
+                key={s} 
+                onClick={() => setSelectedSuit(s)} 
+                style={{ padding: 10, backgroundColor: selectedSuit === s ? '#4caf50' : '#f0f0f0', color: selectedSuit === s ? 'white' : 'black', cursor: 'pointer' }}
               >
-                {card.rank} of {card.suit}
+                {s.toUpperCase()}
               </button>
             ))}
           </div>
-        </>
-      )}
-
-      {selectedCard && (
-        <div style={{ marginTop: 20, border: '1px solid black', padding: 10 }}>
-          <h3>Choose a suit for your {selectedCard.rank} of {selectedCard.suit}:</h3>
-          {['hearts', 'diamonds', 'clubs', 'spades'].map(suit => (
-            <button
-              key={suit}
-              onClick={() => setSelectedSuit(suit)}
-              style={{
-                margin: 5,
-                padding: 10,
-                backgroundColor: selectedSuit === suit ? 'lightblue' : 'white'
-              }}
-            >
-              {suit}
-            </button>
-          ))}
-          <br />
-          <button
-            onClick={confirmPlayCard}
-            style={{ marginTop: 10, padding: 10 }}
-          >
-            Play Card
-          </button>
+          <button onClick={confirmPlayCard} style={{ padding: '10px 20px', backgroundColor: '#007bff', color: 'white', border: 'none', cursor: 'pointer' }}>Confirm Move</button>
+          <button onClick={() => setSelectedCard(null)} style={{ marginLeft: 10, background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}>Cancel</button>
         </div>
       )}
 
-      <div style={{ marginTop: 20 }}>
-        <button
-          onClick={drawCard}
-          disabled={gameState.currentPlayerIndex !== gameState.players.findIndex(p => p.id === myPlayer?.id)}
-          style={{ padding: 10, marginRight: 10 }}
-        >
-          Draw Card
-        </button>
-
-        {gameState.players.length >= 2 && gameState.players.every(p => p.hand.length === 0) && (
-          <button onClick={startGame} style={{ padding: 10 }}>
-            Start New Game
-          </button>
-        )}
-      </div>
-
-      <div style={{ marginTop: 20 }}>
-        <h3>Discard Pile:</h3>
-        {gameState.discardPile.length > 0 && (
-          <div style={{ padding: 10, border: '1px solid gray', display: 'inline-block' }}>
-            {gameState.discardPile[gameState.discardPile.length - 1].rank} of {gameState.discardPile[gameState.discardPile.length - 1].suit}
-          </div>
-        )}
+      {/* Controls */}
+      <div style={{ marginTop: 20, display: 'flex', gap: 10, alignItems: 'center' }}>
+        <button onClick={drawCard} disabled={!gameHasStarted} style={{ padding: '10px 15px' }}>Draw Card</button>
+        <button onClick={passTurn} disabled={!gameHasStarted} style={{ padding: '10px 15px' }}>Pass Turn</button>
+        
+        <div style={{ marginLeft: 'auto', border: '1px solid #ccc', padding: 10, borderRadius: 4 }}>
+          <label>Call Crazy on: </label>
+          <select id="crazyTarget">
+            <option value="">-- Player --</option>
+            {gameState.players.filter(p => p.socketId !== socket?.id).map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <button onClick={callCrazy} style={{ marginLeft: 5 }}>Call!</button>
+        </div>
       </div>
     </div>
   );

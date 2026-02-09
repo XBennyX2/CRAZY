@@ -6,4 +6,6 @@ export interface Player {
   hand: Card[];
 
   skippedTurns: number;
+  // optional socket id when connected via websocket
+  socketId?: string;
 }

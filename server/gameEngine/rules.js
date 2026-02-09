@@ -1,56 +1,70 @@
 // --- CRAZY Rules Helper Functions ---
 
 function isDrawCard(card) {
-  // 2 or Ace of Spades or 2 of Spades
-  return card.rank === 2 || (card.rank === 'A' && card.suit === 'spades');
+  if (!card) return false;
+  const rank = String(card.rank); // Ensure we are comparing strings
+  // Rank 2 (any suit) or Ace of Spades
+  return rank === '2' || (rank === 'A' && card.suit === 'spades');
 }
 
 function canStack(card, topCard) {
-  // Only draw cards can stack
-  if (!isDrawCard(card) || !isDrawCard(topCard)) return false;
+  if (!card || !topCard) return false;
+  
+  const cardRank = String(card.rank);
+  const topRank = String(topCard.rank);
 
-  // 2 on 2
-  if (card.rank === 2 && topCard.rank === 2) return true;
+  // If the top card isn't a draw card, stacking rules don't apply
+  if (!isDrawCard(topCard)) return false;
 
-  // Ace of Spades on Ace of Spades
-  if (card.rank === 'A' && card.suit === 'spades' &&
-      topCard.rank === 'A' && topCard.suit === 'spades') return true;
+  // 1. Any 2 can stack on any other 2
+  if (cardRank === '2' && topRank === '2') return true;
 
-  // 2 of Spades on Ace of Spades
-  if (card.rank === 2 && card.suit === 'spades' &&
-      topCard.rank === 'A' && topCard.suit === 'spades') return true;
+  // 2. Ace of Spades can stack on Ace of Spades
+  if (cardRank === 'A' && card.suit === 'spades' &&
+      topRank === 'A' && topCard.suit === 'spades') return true;
 
-  // Ace of Spades on 2 of Spades
-  if (card.rank === 'A' && card.suit === 'spades' &&
-      topCard.rank === 2 && topCard.suit === 'spades') return true;
+  // 3. 2 of Spades on Ace of Spades (and vice versa)
+  if (cardRank === '2' && card.suit === 'spades' &&
+      topRank === 'A' && topCard.suit === 'spades') return true;
+
+  if (cardRank === 'A' && card.suit === 'spades' &&
+      topRank === '2' && topCard.suit === 'spades') return true;
 
   return false;
 }
 
 function isSuitChangeCard(card) {
-  return card.rank === 8 || card.rank === 'J' || card.rank === 'JOKER';
+  if (!card) return false;
+  const rank = String(card.rank);
+  return rank === '8' || rank === 'J' || rank === 'JOKER';
 }
 
 function isSkipCard(card, settings) {
-  return card.rank === settings.skipCard;
+  if (!card) return false;
+  return String(card.rank) === String(settings.skipCard);
 }
 
 function isReverseCard(card, settings) {
-  return card.rank === settings.reverseCard;
+  if (!card) return false;
+  return String(card.rank) === String(settings.reverseCard);
 }
 
 // Check if a card is playable on top of current discard
 function matches(card, currentSuit, topCard, suitChangeLock) {
+  if (!card || !topCard) return false;
+  
+  const isWild = isSuitChangeCard(card);
+  
   if (suitChangeLock) {
-    // Only suit match or suit-change card allowed
-    return card.suit === currentSuit || isSuitChangeCard(card);
+    // If someone played an 8/Jack/Joker, you MUST match the chosen suit 
+    // or play another Wild card to hijack the suit again.
+    return card.suit === currentSuit || isWild;
   } else {
-    // Normal play: suit or rank match or suit-change card
-    return card.suit === currentSuit || card.rank === topCard.rank || isSuitChangeCard(card);
+    // Normal play: suit match, rank match, or play a Wild
+    return card.suit === currentSuit || String(card.rank) === String(topCard.rank) || isWild;
   }
 }
 
-// Fisher-Yates shuffle
 function shuffle(array) {
   const shuffled = [...array];
   for (let i = shuffled.length - 1; i > 0; i--) {
