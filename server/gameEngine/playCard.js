@@ -1,36 +1,48 @@
 const { isDrawCard, isSkipCard, isReverseCard, isSuitChangeCard } = require('./rules');
-const advanceTurn = require('./advanceTurn'); // <--- CRITICAL IMPORT
+const advanceTurn = require('./advanceTurn');
 
 /**
- * Helper to find who the "next" person is specifically for applying 
- * effects like "Skip" before the turn officially advances.
+ * Utility: Find the next player index who hasn't finished the game.
  */
 function getNextValidPlayer(state, currentIndex) {
   let nextIndex = currentIndex;
   const totalPlayers = state.players.length;
-
+  // Loop to find the next active player based on direction
   for (let i = 0; i < totalPlayers; i++) {
     nextIndex = (nextIndex + state.direction + totalPlayers) % totalPlayers;
-    const targetPlayer = state.players[nextIndex];
-    if (!state.finishedPlayers.includes(targetPlayer.id)) {
+    if (!state.finishedPlayers.includes(state.players[nextIndex].id)) {
       return nextIndex;
     }
   }
   return currentIndex;
 }
 
+/**
+ * Utility: Calculate rankings based on hand size (used when someone wins).
+ */
+function calculateRankings(players) {
+  return [...players]
+    .sort((a, b) => a.hand.length - b.hand.length)
+    .map((p, index) => ({
+      rank: index + 1,
+      name: p.name,
+      playerId: p.id,
+      cardsLeft: p.hand.length,
+      isWinner: p.hand.length === 0
+    }));
+}
+
 function playCard(state, move) {
   const { playerId, cards, suit } = move;
-
   if (!cards || cards.length === 0) throw new Error('No cards played');
 
-  // 1. Deep copy state
+  // 1. Deep copy for state immutability
   const newState = {
     ...state,
     players: state.players.map(p => ({ 
-      ...p, 
-      hand: [...p.hand],
-      skippedTurns: p.skippedTurns || 0 
+        ...p, 
+        hand: [...p.hand], 
+        skippedTurns: p.skippedTurns || 0 
     })),
     deck: [...state.deck],
     discardPile: [...state.discardPile],
@@ -38,85 +50,82 @@ function playCard(state, move) {
   };
 
   const playerIndex = newState.players.findIndex(p => p.id === playerId);
-  if (playerIndex === -1) throw new Error('Invalid player');
   const player = newState.players[playerIndex];
 
-  let playedCard;
-
-  // 2. Multi-drop Logic (The "7" Rule)
+  // 2. Multi-Drop Sanity Check
+  // (Your validateMove handles strict rules, this is a safety net)
   if (cards.length > 1) {
-    const sevenIndex = cards.findIndex(c => String(c.rank) === '7');
-    if (sevenIndex === -1) throw new Error('Multi-drop requires a 7');
-    
-    const seven = cards[sevenIndex];
-    const otherCards = cards.filter((_, idx) => idx !== sevenIndex);
-
-    // Validate suit match
-    if (!otherCards.every(c => c.suit === seven.suit)) {
-      throw new Error('All cards in multi-drop must have same suit');
-    }
-
-    // Remove from hand
-    const playedIds = cards.map(c => c.id);
-    player.hand = player.hand.filter(c => !playedIds.includes(c.id));
-
-    // Add to discard
-    newState.discardPile.push(...otherCards, seven);
-    playedCard = seven;
-  } else {
-    // Single card play
-    const card = cards[0];
-    player.hand = player.hand.filter(c => c.id !== card.id);
-    newState.discardPile.push(card);
-    playedCard = card;
+    const hasSeven = cards.some(c => String(c.rank) === '7');
+    if (!hasSeven) throw new Error('Multi-drop requires at least one 7');
   }
 
-  // 3. Apply Card Effects
+  // 3. Move Cards: Remove from Hand -> Add to Discard Pile
+  const playedIds = cards.map(c => c.id);
+  player.hand = player.hand.filter(c => !playedIds.includes(c.id));
+  
+  // Important: The LAST card in the array becomes the visual "Top Card"
+  newState.discardPile.push(...cards);
+  const topPlayedCard = cards[cards.length - 1];
 
-  // Draw Stack
-  if (isDrawCard(playedCard)) {
-    const rankStr = String(playedCard.rank);
-    if (rankStr === '2') {
-      newState.drawStack += 2;
-    } else if (rankStr === 'A' && playedCard.suit === 'spades') {
-      newState.drawStack += 5;
+  // 4. Apply Penalties (Accumulate Draw Stack)
+  // Logic: If you drop a 7 and two 2s, the next player gets +4
+  cards.forEach(c => {
+    if (isDrawCard(c)) {
+      const rank = String(c.rank);
+      if (rank === '2') newState.drawStack += 2;
+      else if (rank === 'A' && c.suit === 'spades') newState.drawStack += 5;
     }
-  }
+  });
 
-  // Skip (Rank 5)
-  if (isSkipCard(playedCard, newState.settings)) {
+  // 5. Apply Effect Cards (Skip / Reverse)
+  // Usually applies based on the CARD ON TOP of the stack you just played
+  if (isSkipCard(topPlayedCard, newState.settings)) {
     const nextIdx = getNextValidPlayer(newState, playerIndex);
     newState.players[nextIdx].skippedTurns += 1;
   }
-
-  // Reverse (Rank 7 or Settings)
-  if (isReverseCard(playedCard, newState.settings)) {
+  
+  if (isReverseCard(topPlayedCard, newState.settings)) {
     newState.direction *= -1;
-    // In 2-player games, Reverse acts as a Skip
-    const activePlayers = newState.players.filter(p => !newState.finishedPlayers.includes(p.id));
-    if (activePlayers.length === 2) {
+    // In a 2-player game, Reverse acts as a Skip
+    const activeCount = newState.players.filter(p => !newState.finishedPlayers.includes(p.id)).length;
+    if (activeCount === 2) {
       const nextIdx = getNextValidPlayer(newState, playerIndex);
       newState.players[nextIdx].skippedTurns += 1;
     }
   }
 
-  // Suit Change (8, Jack, Joker)
-  if (isSuitChangeCard(playedCard)) {
-    if (!suit) throw new Error('Suit selection required for this card');
-    newState.currentSuit = suit;
-    newState.suitChangeLock = true;
-    newState.suitChangeLockCounter = 1; 
+  // 6. Suit Management
+  // If ANY card played is a Wild (8, J, Joker), the player controls the suit.
+  const containsWild = cards.some(c => isSuitChangeCard(c));
+
+  if (containsWild) {
+    if (!suit) throw new Error('A suit must be selected for wild cards');
+    newState.currentSuit = suit;       // Set to user's choice
+    newState.suitChangeLock = true;    // Lock it so next player must match suit
   } else {
-    newState.currentSuit = playedCard.suit;
+    // Normal play: The suit follows the TOP CARD of the drop
+    newState.currentSuit = topPlayedCard.suit; 
     newState.suitChangeLock = false;
   }
 
-  // 4. Win Condition
-  if (player.hand.length === 0 && !newState.finishedPlayers.includes(playerId)) {
-    newState.finishedPlayers.push(playerId);
+  // 7. Win Condition Check
+  if (player.hand.length === 0) {
+    // Add to finished list if not already there
+    if (!newState.finishedPlayers.includes(playerId)) {
+      newState.finishedPlayers.push(playerId);
+    }
+    
+    newState.isGameOver = true;
+    newState.status = 'FINISHED';
+    newState.lastWinner = playerId;
+    
+    // Generate Final Leaderboard
+    newState.rankings = calculateRankings(newState.players);
+    
+    return newState; // Return immediately, do not advance turn
   }
 
-  // 5. TURN ADVANCE (This fixes your issue!)
+  // 8. Advance Turn
   return advanceTurn(newState);
 }
 

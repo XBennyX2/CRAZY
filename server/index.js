@@ -22,29 +22,28 @@ const io = new Server(server, {
 io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
 
-  // --- JOIN GAME ---
-  socket.on("joinGame", ({ gameId, playerName }) => {
+  // --- JOIN GAME (UPDATED FOR DECK SELECTION) ---
+  socket.on("joinGame", ({ gameId, playerName, deckCount }) => {
     try {
+      // 1. Create the game if it doesn't exist, passing the deckCount (default to 1)
+      // Note: If the game already exists, createGame should return false/ignore.
+      gameManager.createGame(gameId, deckCount || 1);
+
+      // 2. Add the player to the game
       const result = gameManager.joinGame(gameId, playerName, socket.id);
       
-      // Check if joinGame returned an error (if your logic supports that) or the object
       if (!result || !result.game) {
         socket.emit("error", { message: "Failed to join game" });
         return;
       }
 
-      const { game, player } = result;
-
+      const { game } = result;
       socket.join(gameId);
 
-      // 1. Send the full game state to the person joining
-      socket.emit("gameStateUpdate", game);
+      // Send the full game state to the person joining and everyone else
+      io.to(gameId).emit("gameStateUpdate", game);
 
-      // 2. Notify everyone else in the room that a player joined
-      // We send the UPDATED GAME STATE to everyone, not just a notification
-      socket.to(gameId).emit("gameStateUpdate", game);
-
-      console.log(`${playerName} joined game ${gameId}`);
+      console.log(`${playerName} joined game ${gameId} with ${game.settings.decks} deck(s)`);
     } catch (error) {
       console.error("Join Error:", error);
       socket.emit("error", { message: error.message });
@@ -55,15 +54,12 @@ io.on("connection", (socket) => {
   socket.on("startGame", ({ gameId }) => {
     console.log(`Start request for ${gameId} from ${socket.id}`);
     try {
-      // Pass socket.id so gameManager can verify the user is in the room
       const result = gameManager.startGame(gameId, socket.id);
 
-      // CRITICAL FIX: Check if the result is an error object
       if (result.error) {
         console.error("Start Game Failed:", result.error);
         socket.emit("error", { message: result.error });
       } else {
-        // If success, 'result' is the Game Object
         io.to(gameId).emit("gameStateUpdate", result);
         console.log(`Game ${gameId} started successfully`);
       }
@@ -121,7 +117,6 @@ io.on("connection", (socket) => {
         const result = gameManager.handleCallCrazy(gameId, socket.id, targetPlayerId);
         if (result.success) {
             io.to(gameId).emit("gameStateUpdate", result.gameState);
-            // Optional: Emit a specific message saying who was caught
         } else {
             socket.emit("error", { message: result.error || result.reason });
         }
@@ -135,7 +130,6 @@ io.on("connection", (socket) => {
     console.log("Client disconnected:", socket.id);
     const game = gameManager.leaveGame(socket.id);
     if (game) {
-      // If a player leaves, update the room so their name disappears
       io.to(game.id).emit("gameStateUpdate", game);
     }
   });

@@ -3,76 +3,89 @@ const { canStack, isSuitChangeCard, matches } = require('./rules');
 function validateMove(state, move) {
   const { playerId, cards, suit } = move;
 
+  // 1. Basic Presence Validation
   if (!cards || !Array.isArray(cards) || cards.length === 0) {
     throw new Error('No cards played');
   }
 
+  // 2. Player/Turn Validation
   const playerIndex = state.players.findIndex(p => p.id === playerId);
   if (playerIndex === -1) throw new Error('Player not found');
   if (playerIndex !== state.currentPlayerIndex) throw new Error('Not your turn');
 
   const player = state.players[playerIndex];
-  const topCard = state.discardPile[state.discardPile.length - 1];
 
-  // --- CASE A: DRAW STACK IS ACTIVE (> 0) ---
-  if (state.drawStack > 0) {
-    if (cards.length !== 1) throw new Error('Must play exactly one card when stacking');
-    
-    const card = cards[0];
-    // Security check: Does the player actually have this card?
-    if (!player.hand.some(c => c.id === card.id)) throw new Error('Card not in hand');
+  // 3. Ownership Validation (Security check)
+  const hasAllCards = cards.every(c => player.hand.some(h => h.id === c.id));
+  if (!hasAllCards) throw new Error('One or more cards not in hand');
 
-    // Logic: To play during a stack, it must be a "stackable" card (another 2/Ace)
-    // OR a Wild Card (Suit Change) if your rules allow escaping a stack with a Wild.
-    const canIStack = canStack(card, topCard);
-    const isWild = isSuitChangeCard(card);
+  // 4. Identify the Game State
+  const isFirstMoveOfGame = state.discardPile.length === 0;
+  const topCard = isFirstMoveOfGame ? null : state.discardPile[state.discardPile.length - 1];
 
-    if (!canIStack && !isWild) {
-      throw new Error(`Cannot stack ${card.rank} on a draw penalty. Play a draw card or draw from deck.`);
-    }
-    
-    if (isWild && !suit) throw new Error('Must choose a suit for wild card');
-    
-    return; // Valid move
-  }
+  // --- SCENARIO A: FIRST MOVE OF THE GAME (Empty Pile) ---
+  if (isFirstMoveOfGame) {
+    if (cards.length > 1) {
+      const seven = cards.find(c => String(c.rank) === '7');
+      if (!seven) throw new Error('To drop multiple cards at once, you must include a 7');
 
-  // --- CASE B: NORMAL PLAY (SINGLE CARD) ---
-  if (cards.length === 1) {
-    const card = cards[0];
-    if (!player.hand.some(c => c.id === card.id)) throw new Error('Card not in hand');
-
-    // Use the matches rule from your rules engine
-    if (!matches(card, state.currentSuit, topCard, state.suitChangeLock)) {
-      throw new Error(`Invalid move: ${card.rank} of ${card.suit} doesn't match ${state.currentSuit}`);
+      const baseSuit = seven.suit;
+      if (!cards.every(c => c.suit === baseSuit)) {
+        throw new Error('All cards in a multi-drop must be the same suit');
+      }
     }
 
-    if (isSuitChangeCard(card) && !suit) {
+    // Wild card check for first move
+    if (cards.some(c => isSuitChangeCard(c)) && !suit) {
       throw new Error('Must choose a suit for wild card');
     }
-  } 
-  // --- CASE C: MULTI-DROP (THE "7" RULE) ---
-  else {
-    // 1. Cannot multi-drop during a penalty stack
-    if (state.drawStack > 0) throw new Error('Cannot multi-drop when draw stack is active');
+    return; // Valid start
+  }
 
-    // 2. Must contain at least one 7
-    const seven = cards.find(c => c.rank === 7 || c.rank === '7');
-    if (!seven) throw new Error('Multi-drop must include a 7');
+  // --- SCENARIO B: PENALTY STACK (+2, +5) ---
+  if (state.drawStack > 0) {
+    // Note: Usually, you can only play 1 card to counter a penalty
+    if (cards.length !== 1) throw new Error('Must play exactly one card to counter a penalty');
+    
+    const card = cards[0];
+    const canCounter = canStack(card, topCard) || isSuitChangeCard(card);
+    
+    if (!canCounter) {
+      throw new Error(`You must play a draw card to counter the +${state.drawStack}`);
+    }
+    
+    if (isSuitChangeCard(card) && !suit) throw new Error('Suit selection required');
+    return;
+  }
 
-    // 3. The 7 itself must be a valid play on the current top card
+  // --- SCENARIO C: STANDARD PLAY (Single or Multi-drop) ---
+  if (cards.length === 1) {
+    // Standard single card match logic
+    const card = cards[0];
+    if (!matches(card, state.currentSuit, topCard, state.suitChangeLock)) {
+      throw new Error(`Invalid move: ${card.rank} of ${card.suit} does not match the current suit (${state.currentSuit})`);
+    }
+  } else {
+    // MULTI-DROP LOGIC (The 7 Rule)
+    const seven = cards.find(c => String(c.rank) === '7');
+    if (!seven) throw new Error('Multi-drop requires a 7');
+
+    // Rule: Every card in the drop must match the suit of the 7
+    const suitOfSeven = seven.suit;
+    if (!cards.every(c => c.suit === suitOfSeven)) {
+      throw new Error('In a multi-drop, all cards must match the suit of the 7');
+    }
+
+    // Rule: The 7 itself must be a legal move (matches suit or rank of the pile)
     if (!matches(seven, state.currentSuit, topCard, state.suitChangeLock)) {
-      throw new Error('The 7 in your multi-drop does not match the pile');
+      throw new Error('The 7 in your multi-drop must match the current pile/suit');
     }
+  }
 
-    // 4. All other cards must match the suit of that 7
-    const suit7 = seven.suit;
-    if (!cards.every(c => c.suit === suit7)) {
-      throw new Error('All cards in a multi-drop must be the same suit');
-    }
-
-    // 5. Ensure player has all these cards
-    const hasAllCards = cards.every(c => player.hand.some(h => h.id === c.id));
-    if (!hasAllCards) throw new Error('One or more cards not in hand');
+  // Final catch-all for Wild Cards (8, J, Joker)
+  const containsWild = cards.some(c => isSuitChangeCard(c));
+  if (containsWild && !suit) {
+    throw new Error('Must choose a suit for wild card selection');
   }
 }
 
